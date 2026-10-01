@@ -11,10 +11,6 @@ from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 
-# ============================================================
-# НАСТРОЙКА
-# ============================================================
-
 load_dotenv()
 
 logging.basicConfig(
@@ -61,25 +57,15 @@ TIMEZONE_NAME = os.getenv(
     "Europe/Moscow",
 ).strip()
 
-# Защита от старого неправильного значения:
-# TIMEZONE=TIMEZONE
 if not TIMEZONE_NAME or TIMEZONE_NAME.upper() == "TIMEZONE":
-    log.warning(
-        "Переменная TIMEZONE задана неправильно: %r. "
-        "Используем Europe/Moscow.",
-        TIMEZONE_NAME,
-    )
-
     TIMEZONE_NAME = "Europe/Moscow"
-
 
 try:
     TZ = ZoneInfo(TIMEZONE_NAME)
 
 except ZoneInfoNotFoundError:
     log.exception(
-        "Часовой пояс '%s' не найден. "
-        "Используем Europe/Moscow.",
+        "Не найден часовой пояс %s. Используем Europe/Moscow.",
         TIMEZONE_NAME,
     )
 
@@ -106,80 +92,146 @@ DISCORD_CHANNEL_COPY = int(
 )
 
 
+intents = discord.Intents.default()
+
 discord_client = discord.Client(
-    intents=discord.Intents.default()
+    intents=intents
 )
 
 discord_ready = asyncio.Event()
 
 
 # ============================================================
-# DISCORD EVENTS
+# DISCORD
 # ============================================================
 
 @discord_client.event
 async def on_ready():
+
     log.info(
-        "Discord подключен: %s (%s)",
+        "============================================"
+    )
+
+    log.info(
+        "DISCORD ПОДКЛЮЧЕН"
+    )
+
+    log.info(
+        "Бот: %s",
         discord_client.user,
+    )
+
+    log.info(
+        "ID: %s",
         discord_client.user.id,
+    )
+
+    log.info(
+        "Серверов: %s",
+        len(discord_client.guilds),
+    )
+
+    for guild in discord_client.guilds:
+        log.info(
+            "Сервер: %s | ID: %s",
+            guild.name,
+            guild.id,
+        )
+
+    log.info(
+        "============================================"
     )
 
     discord_ready.set()
 
 
+@discord_client.event
+async def on_disconnect():
+
+    log.warning(
+        "Discord отключился."
+    )
+
+
+@discord_client.event
+async def on_resumed():
+
+    log.info(
+        "Discord соединение восстановлено."
+    )
+
+
 async def get_discord_channel(channel_id):
-    channel = discord_client.get_channel(channel_id)
+
+    channel = discord_client.get_channel(
+        channel_id
+    )
 
     if channel is not None:
         return channel
 
-    return await discord_client.fetch_channel(channel_id)
+    log.info(
+        "Канал %s не найден в кеше. Запрашиваем Discord API...",
+        channel_id,
+    )
+
+    return await discord_client.fetch_channel(
+        channel_id
+    )
 
 
 async def send_discord(channel_id, text):
-    channel = await get_discord_channel(channel_id)
+
+    channel = await get_discord_channel(
+        channel_id
+    )
 
     if channel is None:
         raise RuntimeError(
             f"Discord канал {channel_id} не найден"
         )
 
-    # Discord ограничивает сообщение 2000 символами.
     for i in range(0, len(text), 2000):
-        await channel.send(text[i:i + 2000])
+
+        await channel.send(
+            text[i:i + 2000]
+        )
 
 
 # ============================================================
-# TIME / DATE
+# TIME
 # ============================================================
 
 def message_datetime(message):
+
     dt = message.date
 
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(
+            tzinfo=timezone.utc
+        )
 
     return dt.astimezone(TZ)
 
 
 def format_dt(dt):
-    return dt.strftime("%d.%m.%Y %H:%M")
+
+    return dt.strftime(
+        "%d.%m.%Y %H:%M"
+    )
 
 
 # ============================================================
-# TELEGRAM SOURCE CHECK
+# SOURCE CHAT
 # ============================================================
 
 def source_chat_matches(message):
+
     chat = message.chat
 
-    # Если указан конкретный ID чата —
-    # используем именно его.
     if SOURCE_CHAT_ID:
         return chat.id == SOURCE_CHAT_ID
 
-    # Иначе проверяем название.
     names = [
         getattr(chat, "title", None),
         getattr(chat, "first_name", None),
@@ -194,7 +246,7 @@ def source_chat_matches(message):
 
 
 # ============================================================
-# TELEGRAM MESSAGE HANDLER
+# TELEGRAM
 # ============================================================
 
 async def handle_update(
@@ -202,8 +254,6 @@ async def handle_update(
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
-    # Нас интересуют именно сообщения,
-    # полученные через Telegram Business.
     message = update.business_message
 
     if message is None:
@@ -228,25 +278,25 @@ async def handle_update(
         text[:300],
     )
 
-    # Игнорируем сообщения не из нужного чата.
     if not source_chat_matches(message):
         log.info(
-            "Сообщение проигнорировано: другой чат."
+            "Сообщение проигнорировано: неправильный источник."
         )
         return
 
-    # Игнорируем сообщения без текста.
     if not text:
         return
 
     lower = text.lower()
 
-    sent_at = message_datetime(message)
+    sent_at = message_datetime(
+        message
+    )
 
     try:
 
         # ====================================================
-        # КОПИРОВАНИЕ СООБЩЕНИЙ ПРО ВОЙНУ
+        # ВОЙНА
         # ====================================================
 
         if (
@@ -256,18 +306,18 @@ async def handle_update(
                 lower,
             )
         ):
+
             await send_discord(
                 DISCORD_CHANNEL_COPY,
                 text,
             )
 
             log.info(
-                "Сообщение о войне отправлено "
-                "в канал COPY."
+                "Сообщение отправлено в COPY."
             )
 
         # ====================================================
-        # DEFF / УДЕРЖИВАЕТ
+        # DEFF
         # ====================================================
 
         if (
@@ -288,18 +338,13 @@ async def handle_update(
             await send_discord(
                 DISCORD_CHANNEL_TIMING,
                 (
-                    f"Следующий дефф "
+                    "Следующий дефф "
                     f"{format_dt(next_deff)} ⚠️"
                 ),
             )
 
-            log.info(
-                "DEFF: следующий дефф %s",
-                format_dt(next_deff),
-            )
-
         # ====================================================
-        # ATTACK / ЗАХВАТЫВАЕТ
+        # ATTACK
         # ====================================================
 
         elif (
@@ -320,18 +365,13 @@ async def handle_update(
             await send_discord(
                 DISCORD_CHANNEL_TIMING,
                 (
-                    f"Следующая атака "
+                    "Следующая атака "
                     f"{format_dt(next_attack)} ♻️"
                 ),
             )
 
-            log.info(
-                "ATTACK: следующая атака %s",
-                format_dt(next_attack),
-            )
-
         # ====================================================
-        # ПРОИГРЫШ
+        # LOSS
         # ====================================================
 
         elif (
@@ -344,24 +384,18 @@ async def handle_update(
                 "❌ Проигрыш - статистика ниже ⬇️",
             )
 
-            log.info(
-                "Зафиксирован проигрыш."
-            )
-
     except Exception:
+
         log.exception(
             "Ошибка обработки business_message"
         )
 
 
-# ============================================================
-# TELEGRAM ERROR HANDLER
-# ============================================================
-
 async def telegram_error(
     update,
     context,
 ):
+
     log.error(
         "Telegram error: %s",
         context.error,
@@ -396,32 +430,75 @@ async def main():
         TIMEZONE_NAME,
     )
 
-    # --------------------------------------------------------
-    # Запускаем Discord
-    # --------------------------------------------------------
+    log.info(
+        "Discord token найден: %s",
+        bool(DISCORD_TOKEN),
+    )
+
+    log.info(
+        "Telegram token найден: %s",
+        bool(TELEGRAM_BOT_TOKEN),
+    )
+
+    # ========================================================
+    # DISCORD
+    # ========================================================
 
     discord_task = asyncio.create_task(
-        discord_client.start(DISCORD_TOKEN)
+        discord_client.start(
+            DISCORD_TOKEN
+        )
     )
 
     try:
 
         log.info(
-            "Ожидаем подключение Discord..."
+            "Подключаемся к Discord..."
         )
 
-        await asyncio.wait_for(
-            discord_ready.wait(),
-            timeout=60,
-        )
+        try:
 
-        log.info(
-            "Discord готов."
-        )
+            await asyncio.wait_for(
+                discord_ready.wait(),
+                timeout=60,
+            )
 
-        # ----------------------------------------------------
-        # Telegram Application
-        # ----------------------------------------------------
+        except asyncio.TimeoutError:
+
+            log.error(
+                "============================================"
+            )
+
+            log.error(
+                "DISCORD НЕ ПОДКЛЮЧИЛСЯ ЗА 60 СЕКУНД"
+            )
+
+            log.error(
+                "Проверяй DISCORD_TOKEN и доступ бота."
+            )
+
+            log.error(
+                "============================================"
+            )
+
+            # Получаем реальную ошибку task
+            if discord_task.done():
+
+                try:
+                    discord_task.result()
+
+                except Exception:
+                    log.exception(
+                        "РЕАЛЬНАЯ ОШИБКА DISCORD:"
+                    )
+
+            raise RuntimeError(
+                "Discord connection timeout"
+            )
+
+        # ====================================================
+        # TELEGRAM
+        # ====================================================
 
         app = (
             Application.builder()
@@ -429,9 +506,6 @@ async def main():
             .build()
         )
 
-        # Обрабатываем все типы Telegram updates,
-        # но внутри handle_update берём только
-        # business_message.
         app.add_handler(
             MessageHandler(
                 filters.ALL,
@@ -442,10 +516,6 @@ async def main():
         app.add_error_handler(
             telegram_error
         )
-
-        # ----------------------------------------------------
-        # Запуск Telegram
-        # ----------------------------------------------------
 
         await app.initialize()
 
@@ -458,28 +528,36 @@ async def main():
         )
 
         log.info(
-            "Telegram Business Bot подключен."
+            "============================================"
         )
 
         log.info(
-            "Мост запущен. Ждем сообщения GTA5RP..."
+            "TELEGRAM BUSINESS BOT ПОДКЛЮЧЕН"
         )
 
-        # Бесконечно держим процесс запущенным.
+        log.info(
+            "МОСТ ЗАПУЩЕН"
+        )
+
+        log.info(
+            "Ждем сообщения GTA5RP..."
+        )
+
+        log.info(
+            "============================================"
+        )
+
         await asyncio.Event().wait()
 
     finally:
 
         log.info(
-            "Останавливаем бота..."
+            "Остановка..."
         )
 
-        # ----------------------------------------------------
-        # Telegram shutdown
-        # ----------------------------------------------------
+        if "app" in locals():
 
-        try:
-            if "app" in locals():
+            try:
 
                 if app.updater.running:
                     await app.updater.stop()
@@ -487,14 +565,11 @@ async def main():
                 await app.stop()
                 await app.shutdown()
 
-        except Exception:
-            log.exception(
-                "Ошибка при остановке Telegram"
-            )
+            except Exception:
 
-        # ----------------------------------------------------
-        # Discord shutdown
-        # ----------------------------------------------------
+                log.exception(
+                    "Ошибка остановки Telegram"
+                )
 
         try:
 
@@ -502,13 +577,10 @@ async def main():
                 await discord_client.close()
 
         except Exception:
-            log.exception(
-                "Ошибка при остановке Discord"
-            )
 
-        # ----------------------------------------------------
-        # Discord task
-        # ----------------------------------------------------
+            log.exception(
+                "Ошибка остановки Discord"
+            )
 
         if not discord_task.done():
 
@@ -522,20 +594,23 @@ async def main():
 
 
 # ============================================================
-# ENTRY POINT
+# START
 # ============================================================
 
 if __name__ == "__main__":
 
     try:
+
         asyncio.run(main())
 
     except KeyboardInterrupt:
+
         log.info(
-            "Бот остановлен вручную."
+            "Бот остановлен."
         )
 
     except Exception:
+
         log.exception(
-            "Критическая ошибка запуска бота."
+            "КРИТИЧЕСКАЯ ОШИБКА БОТА"
         )
