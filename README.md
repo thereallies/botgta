@@ -1,75 +1,36 @@
-# GTA5RP Telegram -> Discord Bridge
+# GTA5RP Business Bot -> Discord
 
-Схема: ваш Telegram-аккаунт -> приватный чат `GTA5RP: бот-помощник` -> Telethon -> Discord Bot.
+Вариант без Telegram API ID/API Hash, Telethon и SESSION_STRING.
 
-## Что делает
+Схема: Telegram Business -> Business Bot -> business_message -> Python -> Discord.
 
-- `Удерживает ... в бою #` -> `✅ Выигрыш (deff) - статистика ниже ⬇️` + `Следующий дефф DD.MM.YYYY HH:MM ⚠️` (+1 час)
-- `Захватывает ... в бою #` -> `✅ Выигрыш (att) - статистика ниже ⬇️` + `Следующая атака DD.MM.YYYY HH:MM ♻️` (+2 часа)
-- `Проигрывает ... в бою #` -> `❌ Проигрыш - статистика ниже ⬇️`
-- `забил/забила/забили/забило` + `войну` -> копирует исходное сообщение целиком в отдельный Discord-канал.
-
-Время берется из timestamp исходного сообщения Telegram и переводится в `TIMEZONE` (по умолчанию `Europe/Moscow`), а не берется с сервера.
-
-## 1. Получить Telegram API ID / Hash
-
-Откройте https://my.telegram.org/apps и создайте API application.
-
-## 2. Получить SESSION_STRING локально
-
-На компьютере:
-
-```bash
-pip install telethon
-python setup_telegram.py
-```
-
-Скрипт попросит номер/код Telegram и, если включен, пароль 2FA. Затем покажет `SESSION_STRING` и попробует найти чат GTA5RP и его ID.
-
-**SESSION_STRING — секрет. Не публикуйте его и не коммитьте в Git.**
-
-## 3. Создать Discord Bot
-
-Создайте обычного Discord-бота и добавьте его на сервер. Дайте ему доступ к трем нужным каналам и право `Send Messages`.
-
-Получите:
-- Discord Bot Token
-- ID канала результатов
-- ID канала тайминга
-- ID канала копирования войн
-
-## 4. Bothost
-
-Загрузите проект в Git и создайте Python-бота на Bothost. Главный файл: `bot.py`.
-
-Добавьте Environment Variables:
+## Переменные Bothost
 
 ```text
-TELEGRAM_API_ID=...
-TELEGRAM_API_HASH=...
-SESSION_STRING=...
-TELEGRAM_SOURCE_CHAT_ID=...
-
-DISCORD_TOKEN=...
-DISCORD_CHANNEL_RESULTS=...
-DISCORD_CHANNEL_TIMING=...
-DISCORD_CHANNEL_COPY=...
-
+TELEGRAM_BOT_TOKEN=токен_из_BotFather
+TELEGRAM_SOURCE_CHAT_ID=0
+TELEGRAM_SOURCE_CHAT_TITLE=GTA5RP: бот-помощник
+DISCORD_TOKEN=токен_Discord_бота
+DISCORD_CHANNEL_RESULTS=ID_канала_результатов
+DISCORD_CHANNEL_TIMING=ID_канала_тайминга
+DISCORD_CHANNEL_COPY=ID_канала_копирования
 TIMEZONE=Europe/Moscow
 ```
 
-После деплоя запускается только `bot.py`. `setup_telegram.py` нужен один раз локально для получения сессии.
+Если в логах будет известен ID чата GTA5RP, лучше заменить `TELEGRAM_SOURCE_CHAT_ID=0` на него.
 
-## 5. Ожидаемый лог
+Главный файл Bothost: `bot.py`.
 
-```text
-Discord: вошли как MyBot (...)
-Telegram: вошли как username (...)
-Источник найден: GTA5RP: бот-помощник
-Мост запущен. Ждем новые сообщения...
-```
+## Логика
 
-## Важно
+`Удерживает ... в бою #` -> `✅ Выигрыш (deff) - статистика ниже ⬇️` + следующий дефф через 1 час.
 
-Не добавляйте `.env` или `SESSION_STRING` в публичный репозиторий. Если строка сессии утекла, завершите Telegram-сессию и создайте новую.
-fsdfsd
+`Захватывает ... в бою #` -> `✅ Выигрыш (att) - статистика ниже ⬇️` + следующая атака через 2 часа.
+
+`Проигрывает ... в бою #` -> `❌ Проигрыш - статистика ниже ⬇️`.
+
+`забил/забила/забили/забило ... войну` -> полный текст в канал копирования.
+
+Время считается от времени исходного Telegram-сообщения и переводится в `TIMEZONE`.
+
+Не публикуйте `TELEGRAM_BOT_TOKEN` или `DISCORD_TOKEN`.

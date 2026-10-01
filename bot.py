@@ -2,126 +2,124 @@ import asyncio
 import logging
 import os
 import re
-from datetime import timedelta
+from datetime import timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import discord
+from telegram import Update
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
 from dotenv import load_dotenv
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("gta5rp-bridge")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
+log = logging.getLogger('gta5rp-bridge')
 
-def required(name: str) -> str:
+def required(name):
     value = os.getenv(name)
     if not value:
-        raise RuntimeError(f"Не задана переменная окружения: {name}")
+        raise RuntimeError(f'Не задана переменная окружения: {name}')
     return value
 
-TELEGRAM_API_ID = int(required("TELEGRAM_API_ID"))
-TELEGRAM_API_HASH = required("TELEGRAM_API_HASH")
-SESSION_STRING = required("SESSION_STRING")
-TELEGRAM_SOURCE_CHAT_ID = int(required("TELEGRAM_SOURCE_CHAT_ID"))
-
-DISCORD_TOKEN = required("DISCORD_TOKEN")
-CHANNEL_RESULTS = int(required("DISCORD_CHANNEL_RESULTS"))
-CHANNEL_TIMING = int(required("DISCORD_CHANNEL_TIMING"))
-CHANNEL_COPY = int(required("DISCORD_CHANNEL_COPY"))
-
-TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Moscow")
+TELEGRAM_BOT_TOKEN = required('TELEGRAM_BOT_TOKEN')
+SOURCE_CHAT_ID = int(os.getenv('TELEGRAM_SOURCE_CHAT_ID', '0'))
+SOURCE_CHAT_TITLE = os.getenv('TELEGRAM_SOURCE_CHAT_TITLE', 'GTA5RP: бот-помощник').strip().lower()
+TIMEZONE_NAME = os.getenv('TIMEZONE', 'Europe/Moscow')
 TZ = ZoneInfo(TIMEZONE_NAME)
 
-tg = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
-intents = discord.Intents.default()
-dc = discord.Client(intents=intents)
+DISCORD_TOKEN = required('DISCORD_TOKEN')
+DISCORD_CHANNEL_RESULTS = int(required('DISCORD_CHANNEL_RESULTS'))
+DISCORD_CHANNEL_TIMING = int(required('DISCORD_CHANNEL_TIMING'))
+DISCORD_CHANNEL_COPY = int(required('DISCORD_CHANNEL_COPY'))
+
+discord_client = discord.Client(intents=discord.Intents.default())
 discord_ready = asyncio.Event()
 
-@dc.event
+@discord_client.event
 async def on_ready():
-    log.info("Discord: вошли как %s (%s)", dc.user, dc.user.id)
+    log.info('Discord подключен: %s (%s)', discord_client.user, discord_client.user.id)
     discord_ready.set()
 
-async def get_channel(channel_id: int):
-    channel = dc.get_channel(channel_id)
-    return channel if channel is not None else await dc.fetch_channel(channel_id)
+async def get_discord_channel(channel_id):
+    channel = discord_client.get_channel(channel_id)
+    return channel if channel is not None else await discord_client.fetch_channel(channel_id)
 
-async def send_discord(channel_id: int, text: str):
-    channel = await get_channel(channel_id)
-    if len(text) <= 2000:
-        await channel.send(text)
-        return
+async def send_discord(channel_id, text):
+    channel = await get_discord_channel(channel_id)
     for i in range(0, len(text), 2000):
         await channel.send(text[i:i + 2000])
 
-def message_time(message):
+def message_datetime(message):
     dt = message.date
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(TZ)
 
-def fmt(dt):
-    return dt.strftime("%d.%m.%Y %H:%M")
+def format_dt(dt):
+    return dt.strftime('%d.%m.%Y %H:%M')
 
-async def process_message(event):
-    text = (event.raw_text or "").strip()
-    if not text:
+def source_chat_matches(message):
+    chat = message.chat
+    if SOURCE_CHAT_ID:
+        return chat.id == SOURCE_CHAT_ID
+    names = [getattr(chat, 'title', None), getattr(chat, 'first_name', None), getattr(chat, 'last_name', None)]
+    full_name = ' '.join(x for x in names if x).strip().lower()
+    return full_name == SOURCE_CHAT_TITLE
+
+async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.business_message
+    if message is None:
+        return
+    chat = message.chat
+    text = (message.text or message.caption or '').strip()
+    log.info('BUSINESS MESSAGE | chat_id=%s | chat=%s | text=%r', chat.id, getattr(chat, 'title', None) or getattr(chat, 'first_name', None) or getattr(chat, 'username', None), text[:300])
+    if not source_chat_matches(message) or not text:
         return
     lower = text.lower()
-    sent_at = message_time(event.message)
+    sent_at = message_datetime(message)
     try:
-        # Сообщения вида: "Ваша организация забила ... войну ..."
-        if "войну" in lower and re.search(r"\bзабил(?:а|и|о)?\b", lower):
-            await send_discord(CHANNEL_COPY, text)
-            log.info("WAR COPY: %s", text[:150])
-
-        if "удерживает" in lower and "в бою #" in lower:
-            await send_discord(CHANNEL_RESULTS, "✅ Выигрыш (deff) - статистика ниже ⬇️")
-            next_time = sent_at + timedelta(hours=1)
-            await send_discord(CHANNEL_TIMING, f"Следующий дефф {fmt(next_time)} ⚠️")
-            log.info("DEFF: %s -> %s", fmt(sent_at), fmt(next_time))
-
-        elif "захватывает" in lower and "в бою #" in lower:
-            await send_discord(CHANNEL_RESULTS, "✅ Выигрыш (att) - статистика ниже ⬇️")
-            next_time = sent_at + timedelta(hours=2)
-            await send_discord(CHANNEL_TIMING, f"Следующая атака {fmt(next_time)} ♻️")
-            log.info("ATT: %s -> %s", fmt(sent_at), fmt(next_time))
-
-        elif "проигрывает" in lower and "в бою #" in lower:
-            await send_discord(CHANNEL_RESULTS, "❌ Проигрыш - статистика ниже ⬇️")
-            log.info("LOSS: %s", fmt(sent_at))
+        if 'войну' in lower and re.search(r'\bзабил(?:а|и|о)?\b', lower):
+            await send_discord(DISCORD_CHANNEL_COPY, text)
+        if 'удерживает' in lower and 'в бою #' in lower:
+            await send_discord(DISCORD_CHANNEL_RESULTS, '✅ Выигрыш (deff) - статистика ниже ⬇️')
+            await send_discord(DISCORD_CHANNEL_TIMING, f'Следующий дефф {format_dt(sent_at + timedelta(hours=1))} ⚠️')
+        elif 'захватывает' in lower and 'в бою #' in lower:
+            await send_discord(DISCORD_CHANNEL_RESULTS, '✅ Выигрыш (att) - статистика ниже ⬇️')
+            await send_discord(DISCORD_CHANNEL_TIMING, f'Следующая атака {format_dt(sent_at + timedelta(hours=2))} ♻️')
+        elif 'проигрывает' in lower and 'в бою #' in lower:
+            await send_discord(DISCORD_CHANNEL_RESULTS, '❌ Проигрыш - статистика ниже ⬇️')
     except Exception:
-        log.exception("Ошибка обработки сообщения")
+        log.exception('Ошибка обработки business_message')
 
-@tg.on(events.NewMessage(chats=TELEGRAM_SOURCE_CHAT_ID))
-async def on_new_message(event):
-    await process_message(event)
+async def telegram_error(update, context):
+    log.error('Telegram error: %s', context.error)
 
 async def main():
-    log.info("Источник Telegram chat ID: %s", TELEGRAM_SOURCE_CHAT_ID)
-    log.info("Часовой пояс: %s", TIMEZONE_NAME)
-    discord_task = asyncio.create_task(dc.start(DISCORD_TOKEN))
+    log.info('=== GTA5RP Telegram Business -> Discord ===')
+    log.info('Источник: %s', SOURCE_CHAT_ID or SOURCE_CHAT_TITLE)
+    log.info('Timezone: %s', TIMEZONE_NAME)
+    discord_task = asyncio.create_task(discord_client.start(DISCORD_TOKEN))
     try:
-        await discord_ready.wait()
-        await tg.start()
-        me = await tg.get_me()
-        log.info("Telegram: вошли как %s (%s)", getattr(me, "username", None) or getattr(me, "first_name", None), me.id)
-        entity = await tg.get_entity(TELEGRAM_SOURCE_CHAT_ID)
-        log.info("Источник найден: %s", getattr(entity, "username", None) or getattr(entity, "first_name", None) or getattr(entity, "title", None))
-        log.info("Мост запущен. Ждем новые сообщения...")
-        await tg.run_until_disconnected()
+        await asyncio.wait_for(discord_ready.wait(), timeout=60)
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        app.add_handler(MessageHandler(filters.ALL, handle_update))
+        app.add_error_handler(telegram_error)
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(allowed_updates=['business_message'])
+        log.info('Telegram Business Bot подключен')
+        log.info('Мост запущен. Ждем сообщения GTA5RP...')
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await app.updater.stop(); await app.stop(); await app.shutdown()
     finally:
-        if tg.is_connected():
-            await tg.disconnect()
+        if not discord_client.is_closed():
+            await discord_client.close()
         if not discord_task.done():
             discord_task.cancel()
-            try:
-                await discord_task
-            except asyncio.CancelledError:
-                pass
-        if not dc.is_closed():
-            await dc.close()
+            try: await discord_task
+            except asyncio.CancelledError: pass
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    try: asyncio.run(main())
+    except KeyboardInterrupt: pass
